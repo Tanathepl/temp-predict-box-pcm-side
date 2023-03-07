@@ -1,0 +1,229 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Regtangular box loaded with rectangular PCM on one side wall loaded with a square block product
+# This model divides the box into 4 zones (top or bottom) and (close to PCM surface or to opposite vertical wall)
+# Each product block is divided into 2 layers: outer layer - shell and inner layer - core (with the core length = 3/4 of block length)
+# all parameters and variables in SI units, temperature in °C 
+
+# 2D approach: the real box length is L but the code consideres a fictive box L'=1m in lenght
+# For insulaition, the real internal area except PCM-container wall is (HL+2WL+2HW)      
+# The virtual box is perfectly insulated at each end, the internal area to consider is (HL'+2WL') with L'=1m      
+# Therefore the real mass PCM is multiplied by L'/L  with L'=1m    
+# The lateral fictive area is corA*HL' (SI unit) the top or bottom area is WL'*corA with L'=1m
+# where corA=(HL+2WL+2HW)/(HL+2WL)  
+
+# index vary from 0 to 3 in this python code instead of 1 to 4 in the article 
+# wall 0 is the PCM-container wall, wall 1/2/3 are for bottom/lateral(opposite to pPCM)/top  
+
+# to obtain equilibrium values, i.e. steady-sate values assuming PCM remains at its melting temperature
+# use a high value of PCM-mass and decrease the Cp of product (divide it by 10) to drop its thermal inertia 
+
+# parameters
+# operating conditions
+
+# [MUST DEFINE] simulation time 
+tmax=24*3600 # in second
+
+# [MUST DEFINE] external temperature 
+vText = np.array([10,30,15])           # values of external temperature for different time intervals
+textT= np.array([8*3600,16*3600,tmax]) # ending time of these intervals 
+
+# [MUST DEFINE] initial condition
+Tp0=4       # initial product temperature
+Tpcm0=-2    # initial pcm temperature   (It has to be lower than melting temperature)
+Twpcm0=5    # initial pcm surface temperature 
+Tw0=20      # initial box temperature
+
+# [MUST DEFINE] box dimension (rectangular)
+W=0.26     # internal width 
+H=0.30     # internal height
+L=0.40     # internal length  
+
+# [MUST DEFINE] Global heat transfer coefficient through insulation 
+K=0.9       # W/m^2/K  
+
+# [MUST DEFINE] properties of internal wall
+ew=0.0035   # internal wall thickness
+rhow=910    # internal wall density
+cpw=1925    # specific heat of internal wall 
+
+# [MUST DEFINE] Emissivity
+E=np.zeros(4)
+E[0]=0.97                       # Cold wall(pcm) 
+E[1]=0.97;E[2]=0.97;E[3]=0.97   # Warm wall(internal wall) (assuming that product emissivity = 1) 
+
+# [MUST DEFINE] product dimension and properties (square shape)
+C=0.1      # size of quarter of product 
+rhop=1070  # density of product 
+cpp=3372   # specific heat of product
+kp=0.51    # conductivity of product
+
+# [MUST DEFINE] properties of PCM
+Tm=0       # pcm melting temperature 
+Lf=333e3   # pcm melting enthalpy in J/kg
+cpcf=2040  # specific heat of frozen pcm
+dTm=0.2    # melting temperature range     
+cpcm=4217  # specific heat of melted pcm
+
+# [MUST DEFINE] PCM mass (for real lenght L) 
+mpcm=3.5
+
+# [MUST DEFINE] convective heat transfers coefficient
+hw0=3    # internal air / PCM wall  W/m²/K   (wall 0) 
+hw=3     # internal air / warm wall  W/m²/K  (wall 1/2/3)
+hp=3     # internal air / product surface  
+hpcm=14  # PCM (solid,partialy.melted or liquid) / PCM-wall  (inside PCM container)
+         # can be estimated roughly by conductivity of PCM / thickness of PCM    
+
+# [MUST DEFINE] properties of air
+cp=1006      # cp of air J/kg/K
+rho=1.269    # air density (only for velocity estimation)
+
+# [MUST DEFINE] simulation parameters 
+dt=5      # time step [Warning : too high time step leads to unaccuracy and instability] 
+
+#initialization for pcm
+mpcm=mpcm/L # pcm mass for hypothetical length of  1 m  
+
+# [MUST DEFINE] surfaces with correction factor
+corA=(H*L+2*W*(H+L))/(H*L+2*W*L)
+A=[H,corA*W,corA*H,corA*W]     # pcm, bottom, side, top 
+
+mcpw_A=ew*rhow*cpw; # thermal inertia of wall per unit area
+mcpw=[A[0]*mcpw_A, A[1]*mcpw_A, A[2]*mcpw_A, A[3]*mcpw_A] # thermal inertia of wall
+
+# Area for heat exchange (for one block)
+Aps=2*C    # product surface
+Apc=3/2*C  # external of product core
+Ac=3/4*C   # between each product core 
+
+# [MUST DEFINE] Mass flow rate of air
+mdot=H*hw0/np.log(3)/cp
+
+# thermal resistance
+Ra_s=1/Aps/hp       # internal air/product surface
+Rs_sh=C/8/Aps/kp    # product surface/product shell
+Ra_sh=Ra_s+Rs_sh    # internal air/product shell
+Rsh_co=3*C/8/Apc/kp # product shell/product core
+Rco=3*C/4/Ac/kp     # between each core
+
+# dimensionless heat transfer coefficient at internal wall (alpha in the article)
+ap=np.exp(-1/Ra_sh/mdot/cp)   
+
+# dimensionless heat transfer coefficient and thermal resistances at walls
+a=np.zeros(4)
+Rwe=np.zeros(4)
+for i in range(1,4):
+  a[i]=np.exp(-hw*A[i]/mdot/cp)   # for internal air/wall exchange (convection)
+  Rwe[i]=1/A[i]/K                 # for external air/wall exchange through insulation 
+a[0]=np.exp(-hw0*A[0]/mdot/cp)    # for internal air/PCM-container wall exchange  
+Rwe[0]=1/A[0]/K                   # for external air/PCM exchange through insulation 
+
+# time step divided by thermal inertia  
+dt_mcpsh=dt/(7/16*C**2*rhop*cpp)  # shell of one product block 
+dt_mcpco=dt/(9/16*C**2*rhop*cpp)  # core of one productblock 
+
+# constants needed in heat balance equations for product  (xxyy_zz means xx*yy/zz) 
+dtCsigma_mcpsh=dt_mcpsh*C*5.67e-8  # radiation at product shell
+mdotcpadt_mcpsh=mdot*cp*dt_mcpsh   # convection at product shell
+dt_mcpsh_Rsh_co=dt_mcpsh/Rsh_co    # conduction from product shell to core
+dt_mcpco_Rsh_co=dt_mcpco/Rsh_co    # conduction from product core to shell
+dt_mcpco_Rco=dt_mcpco/Rco          # conduction between core
+
+# constants needed in heat balance equations at 4 walls
+mdotcpadt_mcpw=np.zeros(4)
+dt_mcpw_Rwe=np.zeros(4)
+dtCsigma_mcpw=np.zeros(4)
+dtCsigma_mcpww=np.zeros(4)
+for i in range(0,4):
+  mdotcpadt_mcpw[i]=mdot*cp*dt/mcpw[i]  # convection from internal air
+  dt_mcpw_Rwe[i]=dt/mcpw[i]/Rwe[i]      # transmission from ambient
+  dtCsigma_mcpw[i]=dt*C*5.67e-8/mcpw[i] # radiation
+
+nt=round(tmax/dt)                # number of time steps   
+t=np.linspace(0,tmax,nt+1)/3600  # time vector
+
+#output parameter definitions 
+Tpcm=np.zeros(nt+1)        # PCM temperature
+Fice=np.zeros(nt+1)        # Ice fraction 
+Tair=np.zeros((nt+1,8))    # T1a,T1p,T2a,T2p... a/p: before/after exchange with product
+Tairm=np.zeros((nt+1,4))   # (T1a+T1p)/2 ... 
+Tsh=np.zeros((nt+1,4))     # Tshell
+Tco=np.zeros((nt+1,4))     # Tcore
+Ts=np.zeros((nt+1,4))      # Tsurface 
+Tw=np.zeros((nt+1,4))      # Twall
+
+#temperature initialization
+Tpcm[0]=Tpcm0
+Tsh[0,:]=[Tp0,Tp0,Tp0,Tp0]
+Tco[0,:]=[Tp0,Tp0,Tp0,Tp0]
+Ts[0,:]=[Tp0,Tp0,Tp0,Tp0]
+Tw[0,:]=[Twpcm0,Tw0,Tw0,Tw0]
+
+# equation systems between air temperature and product shell or internal wall temperature  
+A=np.array ([[-ap, 1,  0,  0,  0,  0,  0,  0  ],    
+             [ 0,-a[0],1,  0,  0,  0,  0,  0  ],     
+             [ 0,  0, -ap, 1,  0,  0,  0,  0  ],   
+             [ 0,  0,  0,-a[1],1,  0,  0,  0  ],     
+             [ 0,  0,  0,  0, -ap, 1,  0,  0  ],     
+             [ 0,  0,  0,  0,  0,-a[2],1,  0  ],      
+             [ 0,  0,  0,  0,  0,  0, -ap, 1  ], 
+             [ 1,  0,  0,  0,  0,  0,  0,-a[3]]])
+A_inv = np.linalg.inv(A) 
+B=np.zeros(8)
+
+# time loop
+nextT=0 # index of time interval for external temperature 
+
+for n in range(0,nt):   
+  if n*dt>textT[nextT]: 
+      nextT +=1  
+  Text=vText[nextT] 
+     
+  # Ice fraction   
+  Fice[n]=max(0,min(1,(Tm+dTm/2-Tpcm[n])/dTm))
+  
+  # Tair from shell and internal wall temperature
+  for i in range(0,4):
+    B[2*i]=(1-ap)*Tsh[n,i]
+    B[2*i+1]=(1-a[i])*Tw[n,i]
+  Tair[n,:]=np.dot(A_inv,B) 
+  
+  # heat balance for shell/core  (Euler)
+  for i in range(0,4):
+    Tairm[n,i]=0.5*(Tair[n,2*i]+Tair[n,2*i+1]) 
+    ray=dtCsigma_mcpsh*(E[i]*(Tw[n,i]+273)**4+E[(i-1)%4]*(Tw[n,(i-1)%4]+273)**4-(E[i]+E[(i-1)%4])*(Ts[n,i]+273)**4)
+    Tsh[n+1,i]=Tsh[n,i]+mdotcpadt_mcpsh*(Tair[n,2*i]-Tair[n,2*i+1])+dt_mcpsh_Rsh_co*(Tco[n,i]-Tsh[n,i])+ray 
+    Tco[n+1,i]=Tco[n,i]+dt_mcpco_Rsh_co*(Tsh[n,i]-Tco[n,i])+dt_mcpco_Rco*(Tco[n,(i+1)%4]-Tco[n,i]) +dt_mcpco_Rco*(Tco[n,(i-1)%4]-Tco[n,i])  
+    Ts[n+1,i]=(Ra_s*Tsh[n+1,i]+Rs_sh*Tairm[n,i])/Ra_sh
+    
+  # heat balance for walls (Euler)  first for walls 1/2/3 then for wall 0 (PCM-container wall)
+  for i in range(1,4):  
+    ray=dtCsigma_mcpw[i]*E[i]*((Ts[n,i]+273)**4+(Ts[n,(i+1)%4]+273)**4-2*(Tw[n,i]+273)**4)
+    Tw[n+1,i]=Tw[n,i]+mdotcpadt_mcpw[i]*(Tair[n,2*i+1]-Tair[n,(2*i+2)% 8])+dt_mcpw_Rwe[i]*(Text-Tw[n,i])+ray
+    
+  ray=dtCsigma_mcpw[0]*E[0]*((Ts[n,0]+273)**4+(Ts[n,1]+273)**4-2*(Tw[n,0]+273)**4)
+  Tw[n+1,0]=Tw[n,0]+mdotcpadt_mcpw[0]*(Tair[n,1]-Tair[n,2])+dt/mcpw[0]*H*hpcm*(Tpcm[n]-Tw[n,0])+ray 
+    
+  # heat balance for PCM
+  mcpcm=mpcm*(cpcf+Lf/dTm*(abs(Tpcm[n]-Tm)<(dTm/2))+(cpcm-cpcf)*(Tpcm[n]>Tm))  # PCM.mass*apparentCp 
+  Tpcm[n+1]=Tpcm[n]+(H*hpcm*(Tw[n,0]-Tpcm[n])+(Text-Tpcm[n])/Rwe[0])/mcpcm*dt 
+ 
+# end of time loop 
+ 
+Tair[nt,:]=Tair[nt-1,:]; Tairm[nt,:]=Tairm[nt-1,:];Fice[nt]=Fice[nt-1]
+Ts[0,:]=Ts[1,:];
+
+#calculated temperature or ice fraction evolution
+plt.figure(0) 
+plt.subplot(3,3,1);plt.plot(t,Ts); plt.legend(['Ts1','2','3','4']);     # product surface temperature
+plt.subplot(3,3,2);plt.plot(t,Tsh); plt.legend(['Tsh1','2','3','4']);   # product shell temperature
+plt.subplot(3,3,3);plt.plot(t,Tco); plt.legend(['Tco1','2','3','4'])    # product core temperature
+plt.subplot(3,3,4);plt.plot(t,Tw); plt.legend(['Tw1','2','3','4'])      # internal wall temperature
+plt.subplot(3,3,5);plt.plot(t,Tairm); plt.legend(['Tair1','2','3','4']) # internal air temperature
+plt.subplot(3,3,6);plt.plot(t,Tairm[:,1],t,Ts[:,1],t,Tsh[:,1],t,Tco[:,1]); plt.legend(['Tair2','Ts','Tsh','Tco']) 
+                                                                        # temperature evolution at zone 2   
+plt.subplot(3,3,7);plt.plot(t,Tpcm,t,Tw[:,0]); plt.legend(['Tpcm','Tpcm.surface']);  
+									# inside pcm and pcm surface temperature
+plt.subplot(3,3,8);plt.plot(t,Fice); plt.legend(['Fice']);              # ice fraction
