@@ -215,6 +215,16 @@ for n in range(0,nt):
 Tair[nt,:]=Tair[nt-1,:]; Tairm[nt,:]=Tairm[nt-1,:];Fice[nt]=Fice[nt-1]
 Ts[0,:]=Ts[1,:];
 
+print('Product temperature at time t')
+print('Tsh1',Tsh[nt,0])
+print('Tsh2',Tsh[nt,1])
+print('Tsh3',Tsh[nt,2])
+print('Tsh4',Tsh[nt,3])
+print('Tco1',Tco[nt,0])
+print('Tco2',Tco[nt,1])
+print('Tco3',Tco[nt,2])
+print('Tco4',Tco[nt,3])
+
 #calculated temperature or ice fraction evolution
 plt.figure(0) 
 plt.subplot(3,3,1);plt.plot(t,Ts); plt.legend(['Ts1','2','3','4']);     # product surface temperature
